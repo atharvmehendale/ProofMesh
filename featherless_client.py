@@ -51,7 +51,7 @@ MODEL_MAP = {
         "featherless": "Qwen/Qwen2.5-Math-72B-Instruct",
     },
     "math_check": {
-        "groq": "deepseek-r1-distill-llama-70b",  # closest Groq has to a math specialist
+        "groq": "openai/gpt-oss-120b",  # deepseek-r1-distill-llama-70b was deprecated by Groq (Sept 2025) - this is one of Groq's own recommended replacements
         "featherless": "Qwen/Qwen2.5-Math-72B-Instruct",
     },
     "judge": {
