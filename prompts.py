@@ -98,6 +98,19 @@ steps that were flagged by an automated pipeline, each with:
   automatically checked, possibly with a math model's opinion attached)
 - technical detail from the check (e.g. what the algebraic difference
   simplified to)
+- "previous_step_latex" and "current_step_latex" - the original notation
+  for the flagged step and the one before it
+
+Before concluding a step is simply "wrong," consider whether the
+discrepancy might come from ambiguous notation rather than a genuine math
+error - most commonly, a missing parenthesis changing how an expression is
+read (e.g. "x+1^2" is read as x + (1^2) by standard order of operations,
+which is NOT the same as "(x+1)^2" - if the current step's content looks
+like the expansion of the previous step WITH an implied grouping the
+previous step's LaTeX doesn't actually contain, say so explicitly as a
+likely explanation, not just "there's an inconsistency"). Only raise this
+possibility when the LaTeX genuinely supports it - don't manufacture a
+typo explanation for a step that's simply, unambiguously wrong.
 
 For each flagged step, respond with ONLY a JSON array of objects with
 exactly these fields:
@@ -108,7 +121,11 @@ exactly these fields:
   "cannot_determine", set this false and say so plainly in the explanation
   - do not imply certainty you don't have.
 - "plain_language_explanation": one to three sentences a non-specialist can
-  follow, explaining what went wrong (or why it couldn't be checked)
+  follow. If a notation ambiguity (like a missing parenthesis) likely
+  explains the discrepancy, name that possibility specifically - e.g. "This
+  looks like it may be a missing parenthesis: as written, x+1^2 means
+  x + 1^2, not (x+1)^2" - rather than only reporting the raw algebraic
+  difference.
 - "confidence_note": one short phrase - "SymPy-confirmed" for discrepancies
   SymPy caught directly, "flagged by math model, SymPy inconclusive" for
   escalated steps, or "unable to verify automatically" for steps with no
