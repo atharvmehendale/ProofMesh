@@ -77,7 +77,7 @@ def run_pipeline(extracted: list[dict], secrets: dict, source_filename: str = "p
                 "explanation": opinion.explanation,
             })
 
-    flagged = discrepancies_for_judge(verified)
+    flagged = discrepancies_for_judge(verified, extracted)
     judge_verdicts = run_judge(secrets, flagged, math_opinions_for_judge) if flagged else []
 
     return ProofAuditResult(
