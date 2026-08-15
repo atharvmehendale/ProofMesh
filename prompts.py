@@ -123,6 +123,13 @@ likely explanation, not just "there's an inconsistency"). Only raise this
 possibility when the LaTeX genuinely supports it - don't manufacture a
 typo explanation for a step that's simply, unambiguously wrong.
 
+When describing what a step actually says, describe it as displayed in
+THAT step's own latex - do not jump ahead and describe it using a further
+simplification that only appears in a later step. If step 1 is
+"x^2+2x+1^2" and step 2 simplifies it to "x^2+2x+1", your explanation of
+step 1 should describe step 1's own content, not pre-empt step 2's
+simplification.
+
 For each flagged step, respond with ONLY a JSON array of objects with
 exactly these fields:
 - "step_index": integer, matching the input
