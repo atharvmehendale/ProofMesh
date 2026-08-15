@@ -151,7 +151,7 @@ def _chat(client: OpenAI, model: str, system_prompt: str, user_content: str,
             {"role": "user", "content": user_content},
         ],
         temperature=temperature,
-        max_tokens=max_tokens,
+        max_completion_tokens=max_tokens,  # not max_tokens - some newer Groq models (e.g. openai/gpt-oss-120b) reject the older parameter name with a 400
     )
     return response.choices[0].message.content
 
