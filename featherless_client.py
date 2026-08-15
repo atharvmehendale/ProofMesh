@@ -23,6 +23,7 @@ is testing a different, weaker model until you flip PROVIDER to
 
 from __future__ import annotations
 
+import ast
 import json
 import re
 from typing import Optional
@@ -95,7 +96,7 @@ class ModelOutputError(Exception):
 
 
 def _extract_json(raw_text: str):
-    """Turns a model's raw response into parsed JSON, trying progressively
+    """Turns a model's raw response into parsed data, trying progressively
     looser strategies - models reliably break a 'JSON only' instruction in
     a handful of predictable ways, so each is handled explicitly rather
     than assumed away:
@@ -103,9 +104,17 @@ def _extract_json(raw_text: str):
       2. Strip markdown code fences (```json or ```JSON - case varies).
       3. Pull out the first [...] or {...} block, in case the model added
          prose before/after despite instructions not to.
+      4. ast.literal_eval - for models that write Python dict/list syntax
+         with single quotes ('index': 0) instead of actual JSON. This is
+         NOT valid JSON and json.loads correctly rejects it, but it's
+         still safely parseable as a Python literal - confirmed as a real
+         failure mode during testing, not a hypothetical one. Deliberately
+         NOT using a regex to swap quotes instead: that breaks the moment
+         any string contains an apostrophe, while literal_eval parses the
+         actual structure correctly regardless.
     Raises ModelOutputError with the raw text attached if none of these
-    work, rather than letting a bare JSONDecodeError propagate with no
-    way to see what actually came back."""
+    work, rather than letting a bare parse error propagate with no way to
+    see what actually came back."""
     candidates = [raw_text.strip()]
 
     fence_stripped = re.sub(
@@ -124,11 +133,17 @@ def _extract_json(raw_text: str):
         except json.JSONDecodeError:
             continue
 
-    raise ModelOutputError(raw_text, context="Could not parse model output as JSON after trying fence-stripping and bracket extraction.")
+    for candidate in candidates:
+        try:
+            return ast.literal_eval(candidate)
+        except (ValueError, SyntaxError):
+            continue
+
+    raise ModelOutputError(raw_text, context="Could not parse model output as JSON or as a Python literal, after trying fence-stripping and bracket extraction.")
 
 
 def _chat(client: OpenAI, model: str, system_prompt: str, user_content: str,
-          temperature: float = 0.0) -> str:
+          temperature: float = 0.0, max_tokens: int = 2048) -> str:
     response = client.chat.completions.create(
         model=model,
         messages=[
@@ -136,6 +151,7 @@ def _chat(client: OpenAI, model: str, system_prompt: str, user_content: str,
             {"role": "user", "content": user_content},
         ],
         temperature=temperature,
+        max_tokens=max_tokens,
     )
     return response.choices[0].message.content
 
