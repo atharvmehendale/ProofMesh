@@ -47,7 +47,7 @@ BASE_URLS = {
 # real submission models - see caveat above.
 MODEL_MAP = {
     "extraction": {
-        "groq": "llama-3.3-70b-versatile",
+        "groq": "openai/gpt-oss-120b",  # llama-3.3-70b-versatile was decommissioned by Groq (deprecated June 17, 2026) - this is Groq's own recommended replacement
         "featherless": "Qwen/Qwen2.5-Math-72B-Instruct",
     },
     "math_check": {
@@ -55,7 +55,7 @@ MODEL_MAP = {
         "featherless": "Qwen/Qwen2.5-Math-72B-Instruct",
     },
     "judge": {
-        "groq": "llama-3.3-70b-versatile",
+        "groq": "openai/gpt-oss-120b",  # same decommission as extraction, above
         "featherless": "deepseek-ai/DeepSeek-R1-0528",
     },
     "ocr": {
