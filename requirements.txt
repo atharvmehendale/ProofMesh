@@ -1,0 +1,7 @@
+streamlit>=1.38
+openai>=1.40
+sympy>=1.13
+latex2sympy2>=1.9
+pypdf>=4.3
+pymupdf>=1.24
+python-dotenv>=1.0
