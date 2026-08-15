@@ -198,15 +198,29 @@ def verify_derivation(steps: list[dict]) -> list[VerifiedStep]:
     return comparisons
 
 
-def discrepancies_for_judge(comparisons: list[VerifiedStep]) -> list[dict]:
+def discrepancies_for_judge(comparisons: list[VerifiedStep], extracted_steps: list[dict]) -> list[dict]:
     """Filter down to just what the Judge LLM needs to explain in plain
-    language - keeps that prompt small, focused, and cheap on tokens.
-    Matches the shape schemas.JudgeInput.flagged_steps expects."""
-    return [
-        {"step_index": r.index, "status": r.status, "detail": r.detail}
-        for r in comparisons
-        if r.status in ("discrepancy", "unverifiable")
-    ]
+    language, INCLUDING the original LaTeX for the flagged step and the
+    one before it - not just SymPy's technical detail string. Without the
+    LaTeX, the judge model has no way to notice that a flagged discrepancy
+    might stem from ambiguous notation (e.g. a missing parenthesis) rather
+    than a genuine derivation error - it can't reason about something it
+    never sees. extracted_steps is the original list from run_extraction,
+    used here purely to look up latex by index."""
+    result = []
+    for r in comparisons:
+        if r.status not in ("discrepancy", "unverifiable"):
+            continue
+        prev_latex = extracted_steps[r.index - 1].get("latex", "") if r.index > 0 else ""
+        curr_latex = extracted_steps[r.index].get("latex", "") if r.index < len(extracted_steps) else ""
+        result.append({
+            "step_index": r.index,
+            "status": r.status,
+            "detail": r.detail,
+            "previous_step_latex": prev_latex,
+            "current_step_latex": curr_latex,
+        })
+    return result
 
 
 if __name__ == "__main__":
