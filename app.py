@@ -89,7 +89,17 @@ def run_pipeline(extracted: list[dict], secrets: dict, source_filename: str = "p
 
 
 def render_result(result: ProofAuditResult, extracted_steps: list[dict]) -> None:
-    """All display logic lives here, not scattered through main()."""
+    """All display logic lives here, not scattered through main().
+
+    Each step's equation and its verdict render as ONE colored block, not
+    plain LaTeX followed by a separate message underneath it. That's
+    deliberate, not cosmetic: a flagged equation that renders identically
+    to a correct one - with the only signal being text below it - relies
+    entirely on someone reading past the equation to find out something's
+    wrong. Someone skimming, or who stops reading once they recognize
+    their own equation, gets no warning at all. The equation itself has to
+    carry the signal, which means it lives inside the colored container,
+    not next to it."""
     verdict_by_index = {v.step_index: v for v in result.judge_verdicts}
 
     if not result.has_errors and not any(
@@ -99,21 +109,27 @@ def render_result(result: ProofAuditResult, extracted_steps: list[dict]) -> None
 
     for step in extracted_steps:
         idx = step["index"]
-        st.latex(step["latex"])
+        latex_block = f"$${step['latex']}$$"
 
         matching = next((v for v in result.verified_steps if v.index == idx), None)
         if matching is None:
-            continue  # step 0 has no prior step to compare against
+            # The baseline step - nothing precedes it, so nothing was
+            # checked. Labeled explicitly rather than left to render
+            # identically to a confirmed-valid step, which is the same
+            # silent-signal problem this whole function exists to avoid.
+            st.markdown(latex_block)
+            st.caption(f"Step {idx}: starting point - not checked against anything before it.")
+            continue
 
         jv = verdict_by_index.get(idx)
         if matching.status == "valid":
-            st.caption(f"Step {idx}: consistent with the previous step.")
+            st.success(f"{latex_block}\n\nStep {idx}: consistent with the previous step.")
         elif matching.status == "discrepancy":
             explanation = jv.plain_language_explanation if jv else matching.detail
-            st.error(f"Step {idx}: {explanation}")
+            st.error(f"{latex_block}\n\nStep {idx}: {explanation}")
         else:  # unverifiable
             explanation = jv.plain_language_explanation if jv else matching.detail
-            st.warning(f"Step {idx}: could not be fully verified - {explanation}")
+            st.warning(f"{latex_block}\n\nStep {idx}: could not be fully verified - {explanation}")
 
 
 def main() -> None:
