@@ -101,7 +101,7 @@ def _get_client(secrets: dict) -> OpenAI:
             f"Update your secrets.toml to set PROVIDER = \"featherless\"."
         )
 
-    return OpenAI(base_url=BASE_URLS[provider], api_key=api_key), provider
+    return OpenAI(base_url=BASE_URLS[provider], api_key=api_key, timeout=30.0), provider
 
 
 def _model_for(stage: str, provider: str) -> str:
