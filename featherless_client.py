@@ -154,8 +154,10 @@ def _extract_json(raw_text: str):
 def _chat(client: OpenAI, model: str, system_prompt: str, user_content: str,
           temperature: float = 0.0, max_tokens: int = 2048) -> str:
     
+    raw_text_body = ""
     try:
-        response = client.chat.completions.create(
+        # Use with_raw_response to intercept raw payloads/errors before SDK parsing
+        raw_resp = client.with_raw_response.chat.completions.create(
             model=model,
             messages=[
                 {"role": "system", "content": system_prompt},
@@ -164,18 +166,32 @@ def _chat(client: OpenAI, model: str, system_prompt: str, user_content: str,
             temperature=temperature,
             max_tokens=max_tokens,
         )
+        
+        raw_text_body = raw_resp.text
+        
+        if raw_resp.status_code != 200:
+            raise RuntimeError(
+                f"Featherless API returned HTTP status {raw_resp.status_code}:\n{raw_text_body}\n\n"
+                f"Troubleshooting Tips:\n"
+                f"• If status is 403: The model '{model}' is gated. Go to your Featherless dashboard and click 'Unlock Model' to accept its license.\n"
+                f"• If status is 400: The model is cold/not ready. Wait a moment or try again."
+            )
+
+        response = raw_resp.parse()
+        
     except APIStatusError as e:
-        # Handles 400 (Cold model), 401, 403, 503 (Insufficient capacity), etc.
         err_body = e.response.text if hasattr(e, "response") else str(e)
         raise RuntimeError(
             f"Featherless API Error (Status {e.status_code}): {err_body}\n\n"
-            f"Note: If this is a 400 error stating the model is 'cold', check your Featherless dashboard or try again once warmed up."
+            f"Check if model '{model}' is gated (needs unlocking on your Featherless dashboard) or cold."
         ) from e
     except RateLimitError as e:
         raise RuntimeError(f"Featherless Rate Limit Exceeded (429): {e}") from e
     except APIError as e:
         raise RuntimeError(f"Featherless API Error: {e}") from e
     except Exception as e:
+        if "RuntimeError" in type(e).__name__:
+            raise
         raise RuntimeError(f"Provider API call failed: {e}") from e
 
     # Safely extract choices/content
@@ -184,21 +200,21 @@ def _chat(client: OpenAI, model: str, system_prompt: str, user_content: str,
             data = response.model_dump()
             choices = data.get("choices")
             if not choices:
-                raise ValueError(f"API response contained no choices. Full response: {data}")
+                raise ValueError(f"API response contained no choices. Raw body: {raw_text_body}")
             content = choices[0]["message"]["content"]
         elif hasattr(response, "choices") and response.choices:
             content = response.choices[0].message.content
         else:
-            raise ValueError(f"Unrecognized or empty response structure: {response}")
+            raise ValueError(f"Unrecognized response structure. Raw body: {raw_text_body}")
 
         if content is None:
-            raise ValueError("Message content was explicitly null.")
+            raise ValueError(f"Message content was explicitly null. Raw body: {raw_text_body}")
             
         return str(content)
         
     except (IndexError, KeyError, TypeError, AttributeError, ValueError) as e:
         raise ModelOutputError(
-            raw_text=str(response), 
+            raw_text=raw_text_body or str(response), 
             context=f"Failed to extract text from API response ({type(e).__name__}: {e})."
         )
 
@@ -291,7 +307,7 @@ def run_ocr(secrets: dict, page_image_b64: str, retries: int = 3) -> str:
     last_err = None
     for attempt in range(retries):
         try:
-            response = client.chat.completions.create(
+            raw_resp = client.with_raw_response.chat.completions.create(
                 model=model,
                 messages=[{
                     "role": "user",
@@ -304,11 +320,14 @@ def run_ocr(secrets: dict, page_image_b64: str, retries: int = 3) -> str:
                 }],
             )
             
+            if raw_resp.status_code != 200:
+                raise RuntimeError(f"OCR HTTP {raw_resp.status_code}: {raw_resp.text}")
+
+            response = raw_resp.parse()
             if hasattr(response, "model_dump"):
-                data = response.model_dump()
-                choices = data.get("choices")
+                choices = response.model_dump().get("choices")
                 if not choices:
-                    raise ValueError(f"OCR response contained no choices: {data}")
+                    raise ValueError(f"OCR response contained no choices: {raw_resp.text}")
                 content = choices[0]["message"]["content"]
             else:
                 content = response.choices[0].message.content
