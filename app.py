@@ -107,29 +107,44 @@ def render_result(result: ProofAuditResult, extracted_steps: list[dict]) -> None
     ):
         st.success(f"All {result.total_steps} steps check out. No discrepancies found.")
 
+    unresolved_since = None  # earliest step index still carrying a flagged, uncorrected issue
+
     for step in extracted_steps:
         idx = step["index"]
         latex_block = f"$${step['latex']}$$"
 
         matching = next((v for v in result.verified_steps if v.index == idx), None)
         if matching is None:
-            # The baseline step - nothing precedes it, so nothing was
-            # checked. Labeled explicitly rather than left to render
-            # identically to a confirmed-valid step, which is the same
-            # silent-signal problem this whole function exists to avoid.
             st.markdown(latex_block)
             st.caption(f"Step {idx}: starting point - not checked against anything before it.")
             continue
 
         jv = verdict_by_index.get(idx)
+
         if matching.status == "valid":
-            st.success(f"{latex_block}\n\nStep {idx}: consistent with the previous step.")
+            if unresolved_since is not None:
+                # Locally consistent with the step right before it - but
+                # that step traces back to a flagged, never-corrected
+                # issue. Rendering this as plain green would read as "the
+                # problem's gone," which isn't true - it's just that this
+                # specific step didn't introduce a NEW error on top of the
+                # old one.
+                st.info(
+                    f"{latex_block}\n\nStep {idx}: follows correctly from step {idx - 1}, "
+                    f"but still carries the unresolved issue flagged at step {unresolved_since}."
+                )
+            else:
+                st.success(f"{latex_block}\n\nStep {idx}: consistent with the previous step.")
         elif matching.status == "discrepancy":
             explanation = jv.plain_language_explanation if jv else matching.detail
             st.error(f"{latex_block}\n\nStep {idx}: {explanation}")
+            if unresolved_since is None:
+                unresolved_since = idx
         else:  # unverifiable
             explanation = jv.plain_language_explanation if jv else matching.detail
             st.warning(f"{latex_block}\n\nStep {idx}: could not be fully verified - {explanation}")
+            if unresolved_since is None:
+                unresolved_since = idx
 
 
 def main() -> None:
