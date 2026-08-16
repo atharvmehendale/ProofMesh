@@ -152,24 +152,41 @@ def _extract_json(raw_text: str):
 
 
 def _chat(client: OpenAI, model: str, system_prompt: str, user_content: str,
-          temperature: float = 0.0, max_tokens: int = 2048) -> str:
-    
-    raw_text_body = ""
-    try:
-        # Use with_raw_response to intercept raw payloads/errors before SDK parsing
-        raw_resp = client.with_raw_response.chat.completions.create(
-            model=model,
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_content},
-            ],
-            temperature=temperature,
-            max_tokens=max_tokens,
-        )
-        
-        raw_text_body = raw_resp.text
-        
-        if raw_resp.status_code != 200:
+          temperature: float = 0.0, max_tokens: int = 2048, retries: int = 3) -> str:
+    """Retries on transient failures - rate limits, and capacity errors
+    like 'temporarily at capacity' (a real error hit during testing, not
+    hypothetical) - since those are explicitly temporary per Featherless's
+    own error message, and a silent auto-retry beats a failed take during
+    recording. Does NOT retry on things retrying can't fix (bad model
+    name, auth failure, malformed request) - those fail immediately."""
+    import time
+
+    last_err = None
+    for attempt in range(retries):
+        raw_text_body = ""
+        try:
+            raw_resp = client.with_raw_response.chat.completions.create(
+                model=model,
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_content},
+                ],
+                temperature=temperature,
+                max_completion_tokens=max_tokens,  # not max_tokens - some models (e.g. openai/gpt-oss-120b on Groq) reject the older parameter name with a 400
+            )
+
+            raw_text_body = raw_resp.text
+
+            if raw_resp.status_code == 200:
+                response = raw_resp.parse()
+                return _extract_content(response, raw_text_body)
+
+            is_retryable = raw_resp.status_code == 429 or "capacity" in raw_text_body.lower()
+            if is_retryable and attempt < retries - 1:
+                last_err = RuntimeError(f"HTTP {raw_resp.status_code}: {raw_text_body}")
+                time.sleep(2 * (attempt + 1))
+                continue
+
             raise RuntimeError(
                 f"Featherless API returned HTTP status {raw_resp.status_code}:\n{raw_text_body}\n\n"
                 f"Troubleshooting Tips:\n"
@@ -177,24 +194,28 @@ def _chat(client: OpenAI, model: str, system_prompt: str, user_content: str,
                 f"• If status is 400: The model is cold/not ready. Wait a moment or try again."
             )
 
-        response = raw_resp.parse()
-        
-    except APIStatusError as e:
-        err_body = e.response.text if hasattr(e, "response") else str(e)
-        raise RuntimeError(
-            f"Featherless API Error (Status {e.status_code}): {err_body}\n\n"
-            f"Check if model '{model}' is gated (needs unlocking on your Featherless dashboard) or cold."
-        ) from e
-    except RateLimitError as e:
-        raise RuntimeError(f"Featherless Rate Limit Exceeded (429): {e}") from e
-    except APIError as e:
-        raise RuntimeError(f"Featherless API Error: {e}") from e
-    except Exception as e:
-        if "RuntimeError" in type(e).__name__:
-            raise
-        raise RuntimeError(f"Provider API call failed: {e}") from e
+        except (RateLimitError, APIStatusError) as e:
+            status = getattr(e, "status_code", None)
+            body = e.response.text if hasattr(e, "response") else str(e)
+            is_retryable = status == 429 or "capacity" in body.lower()
+            last_err = RuntimeError(f"Featherless API Error (Status {status}): {body}")
+            if is_retryable and attempt < retries - 1:
+                time.sleep(2 * (attempt + 1))
+                continue
+            raise last_err from e
+        except APIError as e:
+            raise RuntimeError(f"Featherless API Error: {e}") from e
+        except Exception as e:
+            if isinstance(e, RuntimeError):
+                raise
+            raise RuntimeError(f"Provider API call failed: {e}") from e
 
-    # Safely extract choices/content
+    raise last_err or RuntimeError(f"_chat failed after {retries} attempts with no captured error")
+
+
+def _extract_content(response, raw_text_body: str) -> str:
+    """Pulls the message text out of a parsed response, handling both the
+    typed object and the raw-dict shapes the SDK can return."""
     try:
         if hasattr(response, "model_dump"):
             data = response.model_dump()
@@ -209,12 +230,12 @@ def _chat(client: OpenAI, model: str, system_prompt: str, user_content: str,
 
         if content is None:
             raise ValueError(f"Message content was explicitly null. Raw body: {raw_text_body}")
-            
+
         return str(content)
-        
+
     except (IndexError, KeyError, TypeError, AttributeError, ValueError) as e:
         raise ModelOutputError(
-            raw_text=raw_text_body or str(response), 
+            raw_text=raw_text_body or str(response),
             context=f"Failed to extract text from API response ({type(e).__name__}: {e})."
         )
 
