@@ -26,13 +26,6 @@ from pdf_parser import get_derivation_text
 
 _SECRET_KEYS = ["PROVIDER", "GROQ_API_KEY", "FEATHERLESS_API_KEY"]
 
-# Simple examples users can load with one click
-EXAMPLES = {
-    "Correct expansion": "(x+1)^2 = x^2 + 2x + 1",
-    "Seeded error": "(x+1)^2 = x^2 + 2x + 1 = x^2 + 2x + 2",
-    "Chained steps": "x^2 - 4 = (x-2)(x+2) = x(x+2) - 2(x+2)",
-}
-
 
 def get_secrets() -> dict:
     """Merges st.secrets with environment variables / .env."""
@@ -77,7 +70,7 @@ def run_pipeline(extracted: list[dict], secrets: dict, source_filename: str = "p
 
 
 def inject_css() -> None:
-    """Light, restrained styling. Keeps Streamlit's native components but makes them calmer."""
+    """Light, restrained styling."""
     st.markdown("""
     <style>
     /* Overall spacing and typography */
@@ -144,11 +137,6 @@ def inject_css() -> None:
         letter-spacing: 0.04em;
         color: #64748b;
         margin: 1.6rem 0 0.5rem 0;
-    }
-
-    /* Example buttons spacing */
-    div[data-testid="stHorizontalBlock"] button {
-        border-radius: 6px;
     }
     </style>
     """, unsafe_allow_html=True)
@@ -280,11 +268,33 @@ def main() -> None:
     run_clicked = False
 
     if input_mode == "Paste text":
-        # Example buttons
-        cols = st.columns(len(EXAMPLES))
-        for col, (label, text) in zip(cols, EXAMPLES.items()):
-            if col.button(label, use_container_width=True):
-                st.session_state["derivation_text"] = text
+        with st.expander("Try a sample derivation", expanded=False):
+            st.markdown(
+                """
+                These short examples show what ProofMesh does.  
+                Click **Load this example**, then press **Run audit**.
+                """
+            )
+
+            st.markdown("**1. Correct expansion**")
+            st.code("(x+1)^2 = x^2 + 2x + 1", language=None)
+            st.caption("Expected result: every step is marked consistent (green).")
+            if st.button("Load this example", key="ex_correct", use_container_width=True):
+                st.session_state["derivation_text"] = "(x+1)^2 = x^2 + 2x + 1"
+
+            st.markdown("---")
+            st.markdown("**2. Seeded error**")
+            st.code("(x+1)^2 = x^2 + 2x + 1 = x^2 + 2x + 2", language=None)
+            st.caption("Expected result: the final step is flagged as a discrepancy (red).")
+            if st.button("Load this example", key="ex_error", use_container_width=True):
+                st.session_state["derivation_text"] = "(x+1)^2 = x^2 + 2x + 1 = x^2 + 2x + 2"
+
+            st.markdown("---")
+            st.markdown("**3. Chained steps**")
+            st.code("x^2 - 4 = (x-2)(x+2) = x(x+2) - 2(x+2)", language=None)
+            st.caption("Expected result: all steps consistent.")
+            if st.button("Load this example", key="ex_chain", use_container_width=True):
+                st.session_state["derivation_text"] = "x^2 - 4 = (x-2)(x+2) = x(x+2) - 2(x+2)"
 
         source_text = st.text_area(
             "Derivation",
@@ -293,7 +303,7 @@ def main() -> None:
             key="derivation_text",
             label_visibility="collapsed",
         )
-        run_clicked = st.button("Run audit", type="primary", use_container_width=False) and bool(source_text.strip())
+        run_clicked = st.button("Run audit", type="primary") and bool(source_text.strip())
 
     else:
         uploaded = st.file_uploader(
