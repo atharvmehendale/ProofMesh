@@ -146,11 +146,31 @@ def verify_step_pair(prev_index: int, prev_expr, curr_index: int, curr_expr) -> 
     """
     try:
         if isinstance(prev_expr, Eq) and isinstance(curr_expr, Eq):
-            diff = simplify((prev_expr.lhs - prev_expr.rhs) - (curr_expr.lhs - curr_expr.rhs))
+            p_diff = prev_expr.lhs - prev_expr.rhs
+            c_diff = curr_expr.lhs - curr_expr.rhs
+            
+            # Check 1: Do they subtract to 0 exactly?
+            diff = simplify(p_diff - c_diff)
+            
+            if diff == 0:
+                is_zero = True
+            else:
+                # Check 2: Are they proportional? (handles scalar division, e.g., 2x=10 -> x=5)
+                try:
+                    if simplify(c_diff) == 0:
+                        is_zero = False
+                    else:
+                        ratio = simplify(p_diff / c_diff)
+                        # Use getattr to be 100% safe against SymPy missing attribute errors
+                        is_num = getattr(ratio, 'is_number', False)
+                        is_fin = getattr(ratio, 'is_finite', False)
+                        is_zero = bool(is_num and is_fin and ratio != 0)
+                except Exception:
+                    is_zero = False
         else:
             diff = simplify(prev_expr - curr_expr)
+            is_zero = (diff == 0)
 
-        is_zero = (diff == 0)
         status = "valid" if is_zero else "discrepancy"
         detail = "" if is_zero else (
             f"step {prev_index}->{curr_index}: difference simplifies to {diff}, expected 0"
