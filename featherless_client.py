@@ -116,30 +116,14 @@ class ModelOutputError(Exception):
     output, especially on Streamlit Cloud where tracebacks are redacted."""
     def __init__(self, raw_text: str, context: str = ""):
         self.raw_text = raw_text
-        msg = f"{context}\n\nRaw model output:\n{raw_text[:2000]}" if context else raw_text[:2000]
+        msg = f"{context}\n\nRaw API output:\n{raw_text[:3000]}" if context else raw_text[:3000]
         super().__init__(msg)
 
 
 def _extract_json(raw_text: str):
     """Turns a model's raw response into parsed data, trying progressively
     looser strategies - models reliably break a 'JSON only' instruction in
-    a handful of predictable ways, so each is handled explicitly rather
-    than assumed away:
-      1. Straight parse - works if the model actually listened.
-      2. Strip markdown code fences (```json or ```JSON - case varies).
-      3. Pull out the first [...] or {...} block, in case the model added
-         prose before/after despite instructions not to.
-      4. ast.literal_eval - for models that write Python dict/list syntax
-         with single quotes ('index': 0) instead of actual JSON. This is
-         NOT valid JSON and json.loads correctly rejects it, but it's
-         still safely parseable as a Python literal - confirmed as a real
-         failure mode during testing, not a hypothetical one. Deliberately
-         NOT using a regex to swap quotes instead: that breaks the moment
-         any string contains an apostrophe, while literal_eval parses the
-         actual structure correctly regardless.
-    Raises ModelOutputError with the raw text attached if none of these
-    work, rather than letting a bare parse error propagate with no way to
-    see what actually came back."""
+    a handful of predictable ways."""
     candidates = [raw_text.strip()]
 
     fence_stripped = re.sub(
@@ -169,16 +153,47 @@ def _extract_json(raw_text: str):
 
 def _chat(client: OpenAI, model: str, system_prompt: str, user_content: str,
           temperature: float = 0.0, max_tokens: int = 2048) -> str:
-    response = client.chat.completions.create(
-        model=model,
-        messages=[
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_content},
-        ],
-        temperature=temperature,
-        max_tokens=max_tokens,
-    )
-    return response.choices[0].message.content
+    
+    try:
+        response = client.chat.completions.create(
+            model=model,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_content},
+            ],
+            temperature=temperature,
+            max_tokens=max_tokens,
+        )
+    except Exception as e:
+        raise RuntimeError(f"Provider API call failed: {e}") from e
+
+    # Safely extract the response. Featherless documentation specifically uses
+    # .model_dump() instead of standard Pydantic dot-notation because their payload
+    # schemas can sometimes trigger TypeErrors when accessed strictly as objects.
+    try:
+        if hasattr(response, "model_dump"):
+            data = response.model_dump()
+            content = data["choices"][0]["message"]["content"]
+        elif hasattr(response, "choices"):
+            # Fallback for standard OpenAI dot-notation
+            content = response.choices[0].message.content
+        elif isinstance(response, dict):
+            content = response["choices"][0]["message"]["content"]
+        else:
+            raise ValueError(f"Unrecognized response type: {type(response)}")
+
+        if content is None:
+            raise ValueError("Message content was explicitly null.")
+            
+        return str(content)
+        
+    except (IndexError, KeyError, TypeError, AttributeError, ValueError) as e:
+        # By raising ModelOutputError, Streamlit will neatly display the raw response text
+        # in the UI instead of throwing a redacted TypeError crash page.
+        raise ModelOutputError(
+            raw_text=str(response), 
+            context=f"Failed to extract text from API response ({type(e).__name__}: {e}). The provider likely returned an unexpected schema."
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -186,13 +201,6 @@ def _chat(client: OpenAI, model: str, system_prompt: str, user_content: str,
 # ---------------------------------------------------------------------------
 
 def run_extraction(secrets: dict, source_text: str) -> list[dict]:
-    """Returns a list of dicts matching schemas.ExtractedStep shape
-    (index, latex, expr). Raises ModelOutputError (with the raw model text
-    attached) if the output can't be turned into a usable list, even after
-    unwrapping a common model habit: returning {"steps": [...]} instead of
-    a bare array despite being told to. Let this propagate to the caller -
-    a visible, informative error beats a silent empty result or an opaque
-    crash, especially during a live demo."""
     client, provider = _get_client(secrets)
     raw = _chat(client, _model_for("extraction", provider), EXTRACTION_SYSTEM_PROMPT, source_text)
     parsed = _extract_json(raw)
@@ -211,8 +219,6 @@ def run_extraction(secrets: dict, source_text: str) -> list[dict]:
 
 # ---------------------------------------------------------------------------
 # Stage 2: Math-check escalation
-# Call this ONLY for steps where VerifiedStep.needs_math_model_check() is
-# True - never for every step. See core/sympy_verifier.py.
 # ---------------------------------------------------------------------------
 
 def run_math_check(secrets: dict, step_index: int, prev_latex: str, curr_latex: str) -> MathModelOpinion:
@@ -235,9 +241,6 @@ def run_math_check(secrets: dict, step_index: int, prev_latex: str, curr_latex: 
 
 # ---------------------------------------------------------------------------
 # Stage 3: Judge
-# Receives only flagged steps (sympy_verifier.discrepancies_for_judge output)
-# plus any math_model_opinions collected in stage 2 - never the full
-# derivation.
 # ---------------------------------------------------------------------------
 
 def run_judge(secrets: dict, flagged_steps: list[dict],
@@ -263,9 +266,6 @@ def run_judge(secrets: dict, flagged_steps: list[dict],
 
 # ---------------------------------------------------------------------------
 # Stage 0: OCR (only called when core/pdf_parser.py finds no text layer)
-# One call per rendered page image - more rate-limit-prone than the other
-# stages, so this is the one with retry built in rather than failing the
-# whole PDF over a single transient 429.
 # ---------------------------------------------------------------------------
 
 _OCR_INSTRUCTION = (
@@ -296,7 +296,15 @@ def run_ocr(secrets: dict, page_image_b64: str, retries: int = 3) -> str:
                     ],
                 }],
             )
-            return response.choices[0].message.content.strip()
+            
+            # Use safe extraction for OCR payload as well
+            if hasattr(response, "model_dump"):
+                content = response.model_dump()["choices"][0]["message"]["content"]
+            else:
+                content = response.choices[0].message.content
+                
+            return str(content).strip()
+            
         except Exception as e:
             last_err = e
             if attempt < retries - 1:
