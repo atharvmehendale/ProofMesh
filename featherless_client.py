@@ -47,20 +47,20 @@ BASE_URLS = {
 # real submission models - see caveat above.
 MODEL_MAP = {
     "extraction": {
-        "groq": "openai/gpt-oss-120b",  # llama-3.3-70b-versatile was decommissioned by Groq (deprecated June 17, 2026) - this is Groq's own recommended replacement
+        "groq": "openai/gpt-oss-120b",
         "featherless": "Qwen/Qwen2.5-Math-72B-Instruct",
     },
     "math_check": {
-        "groq": "openai/gpt-oss-120b",  # deepseek-r1-distill-llama-70b was deprecated by Groq (Sept 2025) - this is one of Groq's own recommended replacements
+        "groq": "openai/gpt-oss-120b",
         "featherless": "Qwen/Qwen2.5-Math-72B-Instruct",
     },
     "judge": {
-        "groq": "openai/gpt-oss-120b",  # same decommission as extraction, above
+        "groq": "openai/gpt-oss-120b",
         "featherless": "deepseek-ai/DeepSeek-R1-0528",
     },
     "ocr": {
         "groq": "qwen/qwen3.6-27b",  # needs vision support, only used for scanned PDFs
-        "featherless": "Qwen/Qwen2.5-VL-72B-Instruct",  # verify exact ID against Featherless's catalog before Friday
+        "featherless": "Qwen/Qwen2.5-VL-72B-Instruct",
     },
 }
 
@@ -69,7 +69,8 @@ def _get_client(secrets: dict) -> OpenAI:
     """secrets: whatever dict-like object you're pulling config from -
     st.secrets in app.py, or a plain dict for local testing without
     Streamlit at all."""
-    provider = secrets.get("PROVIDER", "groq")
+    # Defaulting to featherless prevents accidental fallback to Groq
+    provider = secrets.get("PROVIDER", "featherless")
     api_key = secrets.get(f"{provider.upper()}_API_KEY")
     if not api_key:
         raise RuntimeError(
@@ -151,7 +152,7 @@ def _chat(client: OpenAI, model: str, system_prompt: str, user_content: str,
             {"role": "user", "content": user_content},
         ],
         temperature=temperature,
-        max_completion_tokens=max_tokens,  # not max_tokens - some newer Groq models (e.g. openai/gpt-oss-120b) reject the older parameter name with a 400
+        max_tokens=max_tokens,
     )
     return response.choices[0].message.content
 
@@ -281,10 +282,7 @@ def run_ocr(secrets: dict, page_image_b64: str, retries: int = 3) -> str:
 
 
 if __name__ == "__main__":
-    # Local smoke test - no Streamlit, no real API call. Confirms the
-    # module wires together and the config-not-found path fails loudly,
-    # which is what you want on a live demo screen, not a silent None.
-    fake_secrets = {}  # deliberately empty
+    fake_secrets = {}
     try:
         run_extraction(fake_secrets, "x + 1 = 2")
     except RuntimeError as e:
