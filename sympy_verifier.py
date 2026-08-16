@@ -145,12 +145,23 @@ def verify_step_pair(prev_index: int, prev_expr, curr_index: int, curr_expr) -> 
     check, not a full theorem prover - don't oversell it as infallible.
     """
     try:
-        if isinstance(prev_expr, Eq) and isinstance(curr_expr, Eq):
-            diff = simplify((prev_expr.lhs - prev_expr.rhs) - (curr_expr.lhs - curr_expr.rhs))
+       if isinstance(prev_expr, Eq) and isinstance(curr_expr, Eq):
+            p_diff = prev_expr.lhs - prev_expr.rhs
+            c_diff = curr_expr.lhs - curr_expr.rhs
+            diff = simplify(p_diff - c_diff)
+            
+            # If strict subtraction isn't 0, check if they are proportional (handles scalar division)
+            if diff != 0:
+                try:
+                    ratio = simplify(p_diff / c_diff)
+                    is_zero = ratio.is_number and ratio != 0
+                except ZeroDivisionError:
+                    is_zero = False
+            else:
+                is_zero = True
         else:
             diff = simplify(prev_expr - curr_expr)
-
-        is_zero = (diff == 0)
+            is_zero = (diff == 0)
         status = "valid" if is_zero else "discrepancy"
         detail = "" if is_zero else (
             f"step {prev_index}->{curr_index}: difference simplifies to {diff}, expected 0"
