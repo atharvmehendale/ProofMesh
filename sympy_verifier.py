@@ -138,35 +138,42 @@ def verify_step_pair(prev_index: int, prev_expr, curr_index: int, curr_expr) -> 
     i.e. whether the difference simplifies to zero. Handles both bare
     expressions and full equations (moves lhs-rhs to one side first).
 
+    For two equations specifically, exact-difference-is-zero is too
+    strict: "2x = 10" -> "x = 5" is a completely valid step (divide both
+    sides by 2), but the two equations aren't IDENTICAL, they're
+    PROPORTIONAL - (2x-10) is exactly 2*(x-5). That's a real, confirmed
+    false positive found via live testing, not a hypothetical: the
+    original zero-difference-only check flagged a correct equation-solving
+    step as wrong. The fix checks proportionality (does one side divide
+    the other with no leftover variable?) in addition to exact equality -
+    this only ever RECOGNIZES more valid steps, it can't introduce new
+    false positives, since a nonzero constant ratio between two sides
+    means they provably have the same solution set.
+
     Known limitation: sympy.simplify() won't catch every true equivalence
-    (e.g. some trig/log identities need targeted rewrites). For a hackathon
-    demo, flag anything simplify() can't reduce to zero as 'discrepancy' and
-    let the Judge LLM add the caveat that this is a symbolic-simplification
-    check, not a full theorem prover - don't oversell it as infallible.
+    (e.g. some trig/log identities need targeted rewrites), and arbitrary
+    constants of integration (+C vs -C) are compared as literal symbols,
+    not recognized as interchangeable - both are documented limitations,
+    not silently ignored. For a hackathon demo, flag anything neither
+    check resolves to zero/proportional as 'discrepancy' and let the Judge
+    LLM add the caveat that this is a symbolic-simplification check, not a
+    full theorem prover - don't oversell it as infallible.
     """
     try:
         if isinstance(prev_expr, Eq) and isinstance(curr_expr, Eq):
-            p_diff = prev_expr.lhs - prev_expr.rhs
-            c_diff = curr_expr.lhs - curr_expr.rhs
-            
-            # Check 1: Do they subtract to 0 exactly?
-            diff = simplify(p_diff - c_diff)
-            
-            if diff == 0:
-                is_zero = True
-            else:
-                # Check 2: Are they proportional? (handles scalar division, e.g., 2x=10 -> x=5)
-                try:
-                    if simplify(c_diff) == 0:
-                        is_zero = False
-                    else:
-                        ratio = simplify(p_diff / c_diff)
-                        # Use getattr to be 100% safe against SymPy missing attribute errors
-                        is_num = getattr(ratio, 'is_number', False)
-                        is_fin = getattr(ratio, 'is_finite', False)
-                        is_zero = bool(is_num and is_fin and ratio != 0)
-                except Exception:
-                    is_zero = False
+            prev_side = simplify(prev_expr.lhs - prev_expr.rhs)
+            curr_side = simplify(curr_expr.lhs - curr_expr.rhs)
+            diff = simplify(prev_side - curr_side)
+            is_zero = (diff == 0)
+
+            if not is_zero and curr_side != 0:
+                ratio = simplify(prev_side / curr_side)
+                # A ratio with no leftover variables means prev_side is
+                # EXACTLY a constant multiple of curr_side - same equation,
+                # scaled (e.g. both sides divided by 2), not a different one.
+                if not ratio.free_symbols and ratio != 0:
+                    is_zero = True
+                    diff = 0
         else:
             diff = simplify(prev_expr - curr_expr)
             is_zero = (diff == 0)
