@@ -141,10 +141,11 @@ def inject_css() -> None:
 
     /* Darker helper text inside sample expander */
     .expected-result {
-        color: #334155;
-        font-size: 0.92rem;
-        margin-top: 0.15rem;
-        margin-bottom: 0.6rem;
+        color: #1e293b;
+        font-size: 0.93rem;
+        margin-top: 0.2rem;
+        margin-bottom: 0.9rem;
+        font-weight: 500;
     }
     </style>
     """, unsafe_allow_html=True)
@@ -275,21 +276,11 @@ def main() -> None:
     run_clicked = False
 
     if input_mode == "Paste text":
-        # Primary action stays high on the page
-        source_text = st.text_area(
-            "Derivation",
-            height=180,
-            placeholder="Paste a multi-step derivation here…\n\ne.g. (x+1)^2 = x^2 + 2x + 1 = x^2 + 2x + 2",
-            key="derivation_text",
-            label_visibility="collapsed",
-        )
-        run_clicked = st.button("Run audit", type="primary") and bool(source_text.strip())
-
-        # Samples are optional help, placed below so they never push the Run button away
+        # Samples first (collapsed) so users discover them easily
         with st.expander("Try a sample derivation", expanded=False):
             st.markdown(
-                "These short examples show what ProofMesh does. "
-                "Click **Load this example**, then press **Run audit** above."
+                "Click the **copy icon** on the right of any example, "
+                "then paste it into the box below and press **Run audit**."
             )
 
             st.markdown("**1. Correct expansion**")
@@ -298,31 +289,29 @@ def main() -> None:
                 '<p class="expected-result">Expected result: every step is marked consistent (green).</p>',
                 unsafe_allow_html=True,
             )
-            if st.button("Load this example", key="ex_correct", use_container_width=True):
-                st.session_state["derivation_text"] = "(x+1)^2 = x^2 + 2x + 1"
-                st.rerun()
 
-            st.markdown("---")
             st.markdown("**2. Seeded error**")
             st.code("(x+1)^2 = x^2 + 2x + 1 = x^2 + 2x + 2", language=None)
             st.markdown(
                 '<p class="expected-result">Expected result: the final step is flagged as a discrepancy (red).</p>',
                 unsafe_allow_html=True,
             )
-            if st.button("Load this example", key="ex_error", use_container_width=True):
-                st.session_state["derivation_text"] = "(x+1)^2 = x^2 + 2x + 1 = x^2 + 2x + 2"
-                st.rerun()
 
-            st.markdown("---")
             st.markdown("**3. Chained steps**")
             st.code("x^2 - 4 = (x-2)(x+2) = x(x+2) - 2(x+2)", language=None)
             st.markdown(
                 '<p class="expected-result">Expected result: all steps consistent.</p>',
                 unsafe_allow_html=True,
             )
-            if st.button("Load this example", key="ex_chain", use_container_width=True):
-                st.session_state["derivation_text"] = "x^2 - 4 = (x-2)(x+2) = x(x+2) - 2(x+2)"
-                st.rerun()
+
+        source_text = st.text_area(
+            "Derivation",
+            height=180,
+            placeholder="Paste a multi-step derivation here…\n\ne.g. (x+1)^2 = x^2 + 2x + 1 = x^2 + 2x + 2",
+            key="derivation_text",
+            label_visibility="collapsed",
+        )
+        run_clicked = st.button("Run audit", type="primary") and bool(source_text.strip())
 
     else:
         uploaded = st.file_uploader(
