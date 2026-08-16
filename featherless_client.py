@@ -28,7 +28,7 @@ import json
 import re
 from typing import Optional
 
-from openai import OpenAI
+from openai import OpenAI, APIStatusError, APIError, RateLimitError
 
 from schemas import MathModelOpinion, JudgeVerdict
 from prompts import (
@@ -164,23 +164,32 @@ def _chat(client: OpenAI, model: str, system_prompt: str, user_content: str,
             temperature=temperature,
             max_tokens=max_tokens,
         )
+    except APIStatusError as e:
+        # Handles 400 (Cold model), 401, 403, 503 (Insufficient capacity), etc.
+        err_body = e.response.text if hasattr(e, "response") else str(e)
+        raise RuntimeError(
+            f"Featherless API Error (Status {e.status_code}): {err_body}\n\n"
+            f"Note: If this is a 400 error stating the model is 'cold', check your Featherless dashboard or try again once warmed up."
+        ) from e
+    except RateLimitError as e:
+        raise RuntimeError(f"Featherless Rate Limit Exceeded (429): {e}") from e
+    except APIError as e:
+        raise RuntimeError(f"Featherless API Error: {e}") from e
     except Exception as e:
         raise RuntimeError(f"Provider API call failed: {e}") from e
 
-    # Safely extract the response. Featherless documentation specifically uses
-    # .model_dump() instead of standard Pydantic dot-notation because their payload
-    # schemas can sometimes trigger TypeErrors when accessed strictly as objects.
+    # Safely extract choices/content
     try:
         if hasattr(response, "model_dump"):
             data = response.model_dump()
-            content = data["choices"][0]["message"]["content"]
-        elif hasattr(response, "choices"):
-            # Fallback for standard OpenAI dot-notation
+            choices = data.get("choices")
+            if not choices:
+                raise ValueError(f"API response contained no choices. Full response: {data}")
+            content = choices[0]["message"]["content"]
+        elif hasattr(response, "choices") and response.choices:
             content = response.choices[0].message.content
-        elif isinstance(response, dict):
-            content = response["choices"][0]["message"]["content"]
         else:
-            raise ValueError(f"Unrecognized response type: {type(response)}")
+            raise ValueError(f"Unrecognized or empty response structure: {response}")
 
         if content is None:
             raise ValueError("Message content was explicitly null.")
@@ -188,11 +197,9 @@ def _chat(client: OpenAI, model: str, system_prompt: str, user_content: str,
         return str(content)
         
     except (IndexError, KeyError, TypeError, AttributeError, ValueError) as e:
-        # By raising ModelOutputError, Streamlit will neatly display the raw response text
-        # in the UI instead of throwing a redacted TypeError crash page.
         raise ModelOutputError(
             raw_text=str(response), 
-            context=f"Failed to extract text from API response ({type(e).__name__}: {e}). The provider likely returned an unexpected schema."
+            context=f"Failed to extract text from API response ({type(e).__name__}: {e})."
         )
 
 
@@ -297,9 +304,12 @@ def run_ocr(secrets: dict, page_image_b64: str, retries: int = 3) -> str:
                 }],
             )
             
-            # Use safe extraction for OCR payload as well
             if hasattr(response, "model_dump"):
-                content = response.model_dump()["choices"][0]["message"]["content"]
+                data = response.model_dump()
+                choices = data.get("choices")
+                if not choices:
+                    raise ValueError(f"OCR response contained no choices: {data}")
+                content = choices[0]["message"]["content"]
             else:
                 content = response.choices[0].message.content
                 
