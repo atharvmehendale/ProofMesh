@@ -138,13 +138,20 @@ def inject_css() -> None:
         color: #64748b;
         margin: 1.6rem 0 0.5rem 0;
     }
+
+    /* Darker helper text inside sample expander */
+    .expected-result {
+        color: #334155;
+        font-size: 0.92rem;
+        margin-top: 0.15rem;
+        margin-bottom: 0.6rem;
+    }
     </style>
     """, unsafe_allow_html=True)
 
 
 def render_summary(result: ProofAuditResult) -> None:
     """Compact status strip above the step list."""
-    n_valid = sum(1 for v in result.verified_steps if v.status == "valid")
     n_disc = sum(1 for v in result.verified_steps if v.status == "discrepancy")
     n_unv = sum(1 for v in result.verified_steps if v.status == "unverifiable")
     n_errors = sum(1 for v in result.judge_verdicts if v.is_error)
@@ -268,34 +275,7 @@ def main() -> None:
     run_clicked = False
 
     if input_mode == "Paste text":
-        with st.expander("Try a sample derivation", expanded=False):
-            st.markdown(
-                """
-                These short examples show what ProofMesh does.  
-                Click **Load this example**, then press **Run audit**.
-                """
-            )
-
-            st.markdown("**1. Correct expansion**")
-            st.code("(x+1)^2 = x^2 + 2x + 1", language=None)
-            st.caption("Expected result: every step is marked consistent (green).")
-            if st.button("Load this example", key="ex_correct", use_container_width=True):
-                st.session_state["derivation_text"] = "(x+1)^2 = x^2 + 2x + 1"
-
-            st.markdown("---")
-            st.markdown("**2. Seeded error**")
-            st.code("(x+1)^2 = x^2 + 2x + 1 = x^2 + 2x + 2", language=None)
-            st.caption("Expected result: the final step is flagged as a discrepancy (red).")
-            if st.button("Load this example", key="ex_error", use_container_width=True):
-                st.session_state["derivation_text"] = "(x+1)^2 = x^2 + 2x + 1 = x^2 + 2x + 2"
-
-            st.markdown("---")
-            st.markdown("**3. Chained steps**")
-            st.code("x^2 - 4 = (x-2)(x+2) = x(x+2) - 2(x+2)", language=None)
-            st.caption("Expected result: all steps consistent.")
-            if st.button("Load this example", key="ex_chain", use_container_width=True):
-                st.session_state["derivation_text"] = "x^2 - 4 = (x-2)(x+2) = x(x+2) - 2(x+2)"
-
+        # Primary action stays high on the page
         source_text = st.text_area(
             "Derivation",
             height=180,
@@ -304,6 +284,45 @@ def main() -> None:
             label_visibility="collapsed",
         )
         run_clicked = st.button("Run audit", type="primary") and bool(source_text.strip())
+
+        # Samples are optional help, placed below so they never push the Run button away
+        with st.expander("Try a sample derivation", expanded=False):
+            st.markdown(
+                "These short examples show what ProofMesh does. "
+                "Click **Load this example**, then press **Run audit** above."
+            )
+
+            st.markdown("**1. Correct expansion**")
+            st.code("(x+1)^2 = x^2 + 2x + 1", language=None)
+            st.markdown(
+                '<p class="expected-result">Expected result: every step is marked consistent (green).</p>',
+                unsafe_allow_html=True,
+            )
+            if st.button("Load this example", key="ex_correct", use_container_width=True):
+                st.session_state["derivation_text"] = "(x+1)^2 = x^2 + 2x + 1"
+                st.rerun()
+
+            st.markdown("---")
+            st.markdown("**2. Seeded error**")
+            st.code("(x+1)^2 = x^2 + 2x + 1 = x^2 + 2x + 2", language=None)
+            st.markdown(
+                '<p class="expected-result">Expected result: the final step is flagged as a discrepancy (red).</p>',
+                unsafe_allow_html=True,
+            )
+            if st.button("Load this example", key="ex_error", use_container_width=True):
+                st.session_state["derivation_text"] = "(x+1)^2 = x^2 + 2x + 1 = x^2 + 2x + 2"
+                st.rerun()
+
+            st.markdown("---")
+            st.markdown("**3. Chained steps**")
+            st.code("x^2 - 4 = (x-2)(x+2) = x(x+2) - 2(x+2)", language=None)
+            st.markdown(
+                '<p class="expected-result">Expected result: all steps consistent.</p>',
+                unsafe_allow_html=True,
+            )
+            if st.button("Load this example", key="ex_chain", use_container_width=True):
+                st.session_state["derivation_text"] = "x^2 - 4 = (x-2)(x+2) = x(x+2) - 2(x+2)"
+                st.rerun()
 
     else:
         uploaded = st.file_uploader(
