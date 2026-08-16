@@ -1,10 +1,16 @@
 """
 app.py
 
-ProofMesh entrypoint - Streamlit Cloud points at this file.
+ProofMesh entrypoint - this is the file Streamlit Cloud points at
+(MAIN_FILE = "app.py"). Thin by design: it wires the pipeline stages
+together and renders results. All the actual logic lives in
+core/sympy_verifier.py, core/pdf_parser.py, models/featherless_client.py,
+models/prompts.py, and schemas.py - this file should stay
+import-and-orchestrate, not grow business logic of its own.
 """
 
 import os
+
 import streamlit as st
 
 try:
@@ -22,6 +28,7 @@ _SECRET_KEYS = ["PROVIDER", "GROQ_API_KEY", "FEATHERLESS_API_KEY"]
 
 
 def get_secrets() -> dict:
+    """Merges st.secrets with environment variables / .env."""
     merged = {k: os.getenv(k) for k in _SECRET_KEYS if os.getenv(k)}
     try:
         merged.update({k: v for k, v in dict(st.secrets).items()})
@@ -31,6 +38,7 @@ def get_secrets() -> dict:
 
 
 def run_pipeline(extracted: list[dict], secrets: dict, source_filename: str = "pasted_text") -> ProofAuditResult:
+    """The verify -> escalate -> judge loop."""
     verified = verify_derivation(extracted)
 
     math_opinions_for_judge = []
@@ -62,77 +70,48 @@ def run_pipeline(extracted: list[dict], secrets: dict, source_filename: str = "p
 
 
 def inject_css() -> None:
+    """Light, restrained styling."""
     st.markdown("""
     <style>
-    /* ---------- Base ---------- */
+    /* Overall spacing and typography */
     .block-container {
-        padding-top: 2rem;
-        padding-bottom: 4rem;
-        max-width: 780px;
+        padding-top: 1.8rem;
+        padding-bottom: 3rem;
+        max-width: 820px;
+    }
+    h1 {
+        font-weight: 600;
+        letter-spacing: -0.02em;
+        margin-bottom: 0.15rem !important;
+    }
+    .stCaption {
+        margin-bottom: 1.4rem;
     }
 
-    /* ---------- Header ---------- */
-    .main-title {
-        font-size: 2.1rem;
-        font-weight: 650;
-        letter-spacing: -0.03em;
-        color: #0f172a;
-        margin-bottom: 0.15rem;
-        line-height: 1.2;
-    }
-    .main-subtitle {
-        font-size: 1.05rem;
-        color: #475569;
-        margin-bottom: 1.75rem;
-        line-height: 1.45;
-    }
-
-    /* ---------- Cards ---------- */
-    .input-card {
-        background: #f8fafc;
-        border: 1px solid #e2e8f0;
-        border-radius: 12px;
-        padding: 1.4rem 1.5rem 1.5rem 1.5rem;
-        margin-bottom: 1.75rem;
-    }
-
-    /* ---------- Section labels ---------- */
-    .section-label {
-        font-size: 0.72rem;
-        font-weight: 650;
-        text-transform: uppercase;
-        letter-spacing: 0.06em;
-        color: #64748b;
-        margin: 0 0 0.85rem 0;
-    }
-
-    /* ---------- Status / Alert boxes ---------- */
+    /* Status boxes – slightly softer, more card-like */
     div[data-testid="stAlert"] {
-        border-radius: 10px;
-        padding: 1rem 1.15rem;
+        border-radius: 8px;
+        padding: 0.9rem 1.1rem;
         border-left-width: 5px;
-        margin-bottom: 0.85rem;
     }
     div[data-testid="stAlert"] p {
-        margin-bottom: 0.3rem;
-        line-height: 1.5;
+        margin-bottom: 0.35rem;
     }
 
-    /* ---------- Summary chips ---------- */
+    /* Summary chips */
     .summary-row {
         display: flex;
         flex-wrap: wrap;
-        gap: 0.5rem;
-        margin: 0.3rem 0 1.5rem 0;
+        gap: 0.55rem;
+        margin: 0.8rem 0 1.4rem 0;
     }
     .summary-chip {
-        background: #f1f5f9;
-        border: 1px solid #e2e8f0;
+        background: #f4f6f8;
+        border: 1px solid #e2e6ea;
         border-radius: 999px;
-        padding: 0.28rem 0.9rem;
-        font-size: 0.875rem;
+        padding: 0.28rem 0.85rem;
+        font-size: 0.88rem;
         color: #334155;
-        font-weight: 500;
     }
     .summary-chip.error {
         background: #fef2f2;
@@ -150,36 +129,30 @@ def inject_css() -> None:
         color: #166534;
     }
 
-    /* ---------- Sample expander helper text ---------- */
+    /* Subtle section labels */
+    .section-label {
+        font-size: 0.78rem;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+        color: #64748b;
+        margin: 1.6rem 0 0.5rem 0;
+    }
+
+    /* Darker helper text inside sample expander */
     .expected-result {
         color: #1e293b;
-        font-size: 0.92rem;
-        margin-top: 0.15rem;
-        margin-bottom: 1.1rem;
+        font-size: 0.93rem;
+        margin-top: 0.2rem;
+        margin-bottom: 0.9rem;
         font-weight: 500;
-    }
-
-    /* ---------- Primary button polish ---------- */
-    div.stButton > button[kind="primary"] {
-        border-radius: 8px;
-        font-weight: 600;
-        padding: 0.45rem 1.4rem;
-    }
-
-    /* ---------- Footer ---------- */
-    .footer {
-        margin-top: 3.5rem;
-        padding-top: 1.25rem;
-        border-top: 1px solid #e2e8f0;
-        font-size: 0.82rem;
-        color: #94a3b8;
-        text-align: center;
     }
     </style>
     """, unsafe_allow_html=True)
 
 
 def render_summary(result: ProofAuditResult) -> None:
+    """Compact status strip above the step list."""
     n_disc = sum(1 for v in result.verified_steps if v.status == "discrepancy")
     n_unv = sum(1 for v in result.verified_steps if v.status == "unverifiable")
     n_errors = sum(1 for v in result.judge_verdicts if v.is_error)
@@ -188,7 +161,7 @@ def render_summary(result: ProofAuditResult) -> None:
 
     if n_errors > 0:
         chips.append(f'<span class="summary-chip error">{n_errors} error{"s" if n_errors != 1 else ""}</span>')
-    elif n_disc > 0:
+    if n_disc > 0 and n_errors == 0:
         chips.append(f'<span class="summary-chip error">{n_disc} discrepancy{"ies" if n_disc != 1 else ""}</span>')
     if n_unv > 0:
         chips.append(f'<span class="summary-chip warn">{n_unv} unverifiable</span>')
@@ -199,6 +172,11 @@ def render_summary(result: ProofAuditResult) -> None:
 
 
 def render_result(result: ProofAuditResult, extracted_steps: list[dict]) -> None:
+    """All display logic lives here.
+
+    Each step's equation and its verdict render as ONE colored block.
+    The equation itself carries the signal.
+    """
     verdict_by_index = {v.step_index: v for v in result.judge_verdicts}
 
     render_summary(result)
@@ -240,7 +218,7 @@ def render_result(result: ProofAuditResult, extracted_steps: list[dict]) -> None
             )
             if unresolved_since is None:
                 unresolved_since = idx
-        else:
+        else:  # unverifiable
             explanation = jv.plain_language_explanation if jv else matching.detail
             st.warning(
                 f"{latex_block}\n\n"
@@ -260,22 +238,18 @@ def main() -> None:
     inject_css()
 
     # ── Header ──────────────────────────────────────────────
-    st.markdown('<div class="main-title">ProofMesh</div>', unsafe_allow_html=True)
-    st.markdown(
-        '<div class="main-subtitle">Verify multi-step mathematical derivations. '
-        'Each step is checked against the one before it.</div>',
-        unsafe_allow_html=True,
-    )
+    st.title("ProofMesh")
+    st.caption("Check multi-step derivations. Each step is verified against the one before it.")
 
-    with st.expander("How it works"):
+    with st.expander("How it works", expanded=False):
         st.markdown(
             """
-            1. **Extract** — turns the text or PDF into ordered steps (LaTeX + SymPy-friendly form).  
+            1. **Extract** — an LLM turns the text (or PDF) into ordered steps with both display LaTeX and a SymPy-friendly expression.  
             2. **Verify** — SymPy checks algebraic consistency between consecutive steps.  
-            3. **Escalate** — only unresolved steps go to a specialized math model.  
-            4. **Explain** — a judge model rewrites technical flags into plain language.
+            3. **Escalate** — only steps SymPy cannot resolve are sent to a specialized math model.  
+            4. **Explain** — a judge model turns technical flags into plain-language notes.
 
-            The equation itself is colored so the status is visible at a glance.
+            The equation itself is colored so you can see the status without reading past it.
             """
         )
 
@@ -290,9 +264,6 @@ def main() -> None:
     # ── Input ───────────────────────────────────────────────
     st.markdown('<div class="section-label">Input</div>', unsafe_allow_html=True)
 
-    # Soft card around the whole input area
-    st.markdown('<div class="input-card">', unsafe_allow_html=True)
-
     input_mode = st.radio(
         "Input method",
         ["Paste text", "Upload PDF"],
@@ -305,37 +276,38 @@ def main() -> None:
     run_clicked = False
 
     if input_mode == "Paste text":
+        # Samples first (collapsed) so users discover them easily
         with st.expander("Try a sample derivation", expanded=False):
             st.markdown(
                 "Click the **copy icon** on the right of any example, "
-                "then paste it into the box below."
+                "then paste it into the box below and press **Run audit**."
             )
 
             st.markdown("**1. Correct expansion**")
             st.code("(x+1)^2 = x^2 + 2x + 1", language=None)
             st.markdown(
-                '<p class="expected-result">Expected: every step marked consistent (green)</p>',
+                '<p class="expected-result">Expected result: every step is marked consistent (green).</p>',
                 unsafe_allow_html=True,
             )
 
             st.markdown("**2. Seeded error**")
             st.code("(x+1)^2 = x^2 + 2x + 1 = x^2 + 2x + 2", language=None)
             st.markdown(
-                '<p class="expected-result">Expected: final step flagged as a discrepancy (red)</p>',
+                '<p class="expected-result">Expected result: the final step is flagged as a discrepancy (red).</p>',
                 unsafe_allow_html=True,
             )
 
             st.markdown("**3. Chained steps**")
             st.code("x^2 - 4 = (x-2)(x+2) = x(x+2) - 2(x+2)", language=None)
             st.markdown(
-                '<p class="expected-result">Expected: all steps consistent</p>',
+                '<p class="expected-result">Expected result: all steps consistent.</p>',
                 unsafe_allow_html=True,
             )
 
         source_text = st.text_area(
             "Derivation",
-            height=170,
-            placeholder="Paste a multi-step derivation here…",
+            height=180,
+            placeholder="Paste a multi-step derivation here…\n\ne.g. (x+1)^2 = x^2 + 2x + 1 = x^2 + 2x + 2",
             key="derivation_text",
             label_visibility="collapsed",
         )
@@ -346,7 +318,7 @@ def main() -> None:
             "PDF",
             type="pdf",
             label_visibility="collapsed",
-            help="Text-layer PDFs are preferred. Scanned pages fall back to vision OCR.",
+            help="Text-layer PDFs are preferred. Scanned pages fall back to vision OCR (slower, uses credits).",
         )
         if uploaded is not None and st.button("Run audit", type="primary"):
             source_filename = uploaded.name
@@ -362,8 +334,6 @@ def main() -> None:
                     f"{info['total_pages']} pages."
                 )
             run_clicked = bool(source_text.strip())
-
-    st.markdown('</div>', unsafe_allow_html=True)  # close input-card
 
     # ── Pipeline ────────────────────────────────────────────
     if run_clicked:
@@ -384,12 +354,6 @@ def main() -> None:
 
         st.markdown('<div class="section-label">Results</div>', unsafe_allow_html=True)
         render_result(result, extracted)
-
-    # ── Footer ──────────────────────────────────────────────
-    st.markdown(
-        '<div class="footer">ProofMesh · symbolic verification + LLM explanation</div>',
-        unsafe_allow_html=True,
-    )
 
 
 if __name__ == "__main__":
