@@ -69,14 +69,38 @@ def _get_client(secrets: dict) -> OpenAI:
     """secrets: whatever dict-like object you're pulling config from -
     st.secrets in app.py, or a plain dict for local testing without
     Streamlit at all."""
-    # Defaulting to featherless prevents accidental fallback to Groq
-    provider = secrets.get("PROVIDER", "featherless")
-    api_key = secrets.get(f"{provider.upper()}_API_KEY")
+    
+    # 1. Safely extract and clean the provider string.
+    raw_provider = secrets.get("PROVIDER", "featherless")
+    provider = str(raw_provider).strip().lower()
+
+    if provider not in BASE_URLS:
+        raise RuntimeError(
+            f"Invalid PROVIDER: '{provider}'. "
+            f"Check your secrets.toml (must be 'groq' or 'featherless')."
+        )
+
+    # 2. Extract and clean the API key. Stripping whitespace is critical
+    #    because a trailing space will cause a 401 AuthenticationError.
+    api_key_name = f"{provider.upper()}_API_KEY"
+    api_key = secrets.get(api_key_name)
+
     if not api_key:
         raise RuntimeError(
             f"No API key found for provider '{provider}'. "
-            f"Expected st.secrets['{provider.upper()}_API_KEY']."
+            f"Expected st.secrets['{api_key_name}']."
         )
+    
+    api_key = str(api_key).strip()
+
+    # 3. Safeguard against key misrouting: sending a Featherless key to Groq returns 401.
+    if provider == "groq" and not api_key.startswith("gsk_"):
+        raise RuntimeError(
+            f"Authentication safeguard: PROVIDER is set to '{provider}' but the key in '{api_key_name}' "
+            f"does not start with 'gsk_'. You are likely sending a Featherless key to Groq's endpoint. "
+            f"Update your secrets.toml to set PROVIDER = \"featherless\"."
+        )
+
     return OpenAI(base_url=BASE_URLS[provider], api_key=api_key), provider
 
 
