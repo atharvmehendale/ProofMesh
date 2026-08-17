@@ -50,8 +50,7 @@ flowchart TD
 
 Only steps SymPy can't automatically resolve get escalated to a second
 model — not the whole derivation, and not by default. Every AI call in
-the app routes through one client (`featherless_client.py`), configurable
-between Groq and Featherless.ai without touching any other file.
+the app routes through one client (`featherless_client.py`).
 
 **Files:**
 
