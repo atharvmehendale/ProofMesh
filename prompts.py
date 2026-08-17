@@ -123,10 +123,6 @@ likely explanation, not just "there's an inconsistency"). Only raise this
 possibility when the LaTeX genuinely supports it - don't manufacture a
 typo explanation for a step that's simply, unambiguously wrong.
 
-When evaluating integration steps, recognize that arbitrary constants of
-integration (like +C or -C) are mathematically equivalent. Do not flag sign
-changes on arbitrary constants as errors.
-
 When describing what a step actually says, describe it as displayed in
 THAT step's own latex - do not jump ahead and describe it using a further
 simplification that only appears in a later step. If step 1 is
