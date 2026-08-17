@@ -1,15 +1,4 @@
-"""
-models/featherless_client.py
 
-Featherless-only client for all three LLM stages (extraction, math-check
-escalation, judge) plus OCR.
-
-HISTORY: this was originally provider-agnostic (Groq + Featherless), used
-during development to test the pipeline shape before Featherless credits
-were available. Groq has been fully removed now that Featherless is
-confirmed working - keeping dead provider-switching logic around after a
-submission is more confusing than useful, not safer.
-"""
 
 from __future__ import annotations
 
@@ -18,7 +7,7 @@ import json
 import re
 from typing import Optional
 
-from openai import OpenAI, APIStatusError, APIError, RateLimitError
+from openai import OpenAI
 
 from schemas import MathModelOpinion, JudgeVerdict
 from prompts import (
@@ -28,17 +17,30 @@ from prompts import (
 )
 
 
-FEATHERLESS_BASE_URL = "https://api.featherless.ai/v1"
+BASE_URLS = {
+    "groq": "https://api.groq.com/openai/v1",
+    "featherless": "https://api.featherless.ai/v1",
+}
 
-# Each stage maps to a LIST of candidate models, tried in order. If the
-# first model fails (including exhausting its own retries on transient
-# errors like capacity_exhausted), the next one is tried automatically -
-# real redundancy, not just hoping one model choice stays available.
+# One row per pipeline stage. "groq" values are dev substitutes, not the
+# real submission models - see caveat above.
 MODEL_MAP = {
-    "extraction": ["Qwen/Qwen2.5-Math-72B-Instruct", "deepseek-ai/DeepSeek-R1-0528"],
-    "math_check": ["Qwen/Qwen2.5-Math-72B-Instruct", "deepseek-ai/DeepSeek-R1-0528"],
-    "judge": ["deepseek-ai/DeepSeek-R1-0528", "Qwen/Qwen2.5-Math-72B-Instruct"],
-    "ocr": ["Qwen/Qwen2.5-VL-72B-Instruct"],  # needs vision support - no confirmed fallback vision model yet
+    "extraction": {
+        "groq": "openai/gpt-oss-120b",  # llama-3.3-70b-versatile was decommissioned by Groq (deprecated June 17, 2026) - this is Groq's own recommended replacement
+        "featherless": "Qwen/Qwen2.5-Math-72B-Instruct",
+    },
+    "math_check": {
+        "groq": "openai/gpt-oss-120b",  # deepseek-r1-distill-llama-70b was deprecated by Groq (Sept 2025) - this is one of Groq's own recommended replacements
+        "featherless": "Qwen/Qwen2.5-Math-72B-Instruct",
+    },
+    "judge": {
+        "groq": "openai/gpt-oss-120b",  # same decommission as extraction, above
+        "featherless": "deepseek-ai/DeepSeek-R1-0528",
+    },
+    "ocr": {
+        "groq": "qwen/qwen3.6-27b",  # needs vision support, only used for scanned PDFs
+        "featherless": "Qwen/Qwen2.5-VL-72B-Instruct",  # verify exact ID against Featherless's catalog before Friday
+    },
 }
 
 
@@ -46,23 +48,18 @@ def _get_client(secrets: dict) -> OpenAI:
     """secrets: whatever dict-like object you're pulling config from -
     st.secrets in app.py, or a plain dict for local testing without
     Streamlit at all."""
-    api_key = secrets.get("FEATHERLESS_API_KEY")
-
+    provider = secrets.get("PROVIDER", "groq")
+    api_key = secrets.get(f"{provider.upper()}_API_KEY")
     if not api_key:
         raise RuntimeError(
-            "No API key found. Expected st.secrets['FEATHERLESS_API_KEY']."
+            f"No API key found for provider '{provider}'. "
+            f"Expected st.secrets['{provider.upper()}_API_KEY']."
         )
-
-    # Stripping whitespace is critical - a trailing space or newline from
-    # a copy-paste is exactly what caused a real AuthenticationError
-    # during testing, and it doesn't show visually in a secrets editor.
-    api_key = str(api_key).strip()
-
-    return OpenAI(base_url=FEATHERLESS_BASE_URL, api_key=api_key, timeout=15.0)
+    return OpenAI(base_url=BASE_URLS[provider], api_key=api_key), provider
 
 
-def _models_for(stage: str) -> list[str]:
-    return MODEL_MAP[stage]
+def _model_for(stage: str, provider: str) -> str:
+    return MODEL_MAP[stage][provider]
 
 
 class ModelOutputError(Exception):
@@ -73,14 +70,30 @@ class ModelOutputError(Exception):
     output, especially on Streamlit Cloud where tracebacks are redacted."""
     def __init__(self, raw_text: str, context: str = ""):
         self.raw_text = raw_text
-        msg = f"{context}\n\nRaw API output:\n{raw_text[:3000]}" if context else raw_text[:3000]
+        msg = f"{context}\n\nRaw model output:\n{raw_text[:2000]}" if context else raw_text[:2000]
         super().__init__(msg)
 
 
 def _extract_json(raw_text: str):
     """Turns a model's raw response into parsed data, trying progressively
     looser strategies - models reliably break a 'JSON only' instruction in
-    a handful of predictable ways."""
+    a handful of predictable ways, so each is handled explicitly rather
+    than assumed away:
+      1. Straight parse - works if the model actually listened.
+      2. Strip markdown code fences (```json or ```JSON - case varies).
+      3. Pull out the first [...] or {...} block, in case the model added
+         prose before/after despite instructions not to.
+      4. ast.literal_eval - for models that write Python dict/list syntax
+         with single quotes ('index': 0) instead of actual JSON. This is
+         NOT valid JSON and json.loads correctly rejects it, but it's
+         still safely parseable as a Python literal - confirmed as a real
+         failure mode during testing, not a hypothetical one. Deliberately
+         NOT using a regex to swap quotes instead: that breaks the moment
+         any string contains an apostrophe, while literal_eval parses the
+         actual structure correctly regardless.
+    Raises ModelOutputError with the raw text attached if none of these
+    work, rather than letting a bare parse error propagate with no way to
+    see what actually came back."""
     candidates = [raw_text.strip()]
 
     fence_stripped = re.sub(
@@ -109,114 +122,17 @@ def _extract_json(raw_text: str):
 
 
 def _chat(client: OpenAI, model: str, system_prompt: str, user_content: str,
-          temperature: float = 0.0, max_tokens: int = 2048, retries: int = 2) -> str:
-    """Retries on transient failures - rate limits, and capacity errors
-    like 'temporarily at capacity' (a real error hit during testing, not
-    hypothetical) - since those are explicitly temporary per Featherless's
-    own error message, and a silent auto-retry beats a failed take during
-    recording. Does NOT retry on things retrying can't fix (bad model
-    name, auth failure, malformed request) - those fail immediately."""
-    import time
-
-    last_err = None
-    for attempt in range(retries):
-        raw_text_body = ""
-        try:
-            raw_resp = client.with_raw_response.chat.completions.create(
-                model=model,
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_content},
-                ],
-                temperature=temperature,
-                max_completion_tokens=max_tokens,  # not max_tokens - some models reject the older parameter name with a 400
-            )
-
-            raw_text_body = raw_resp.text
-
-            if raw_resp.status_code == 200:
-                response = raw_resp.parse()
-                return _extract_content(response, raw_text_body)
-
-            is_retryable = raw_resp.status_code == 429 or "capacity" in raw_text_body.lower()
-            if is_retryable and attempt < retries - 1:
-                last_err = RuntimeError(f"HTTP {raw_resp.status_code}: {raw_text_body}")
-                time.sleep(2 * (attempt + 1))
-                continue
-
-            raise RuntimeError(
-                f"Featherless API returned HTTP status {raw_resp.status_code}:\n{raw_text_body}\n\n"
-                f"Troubleshooting Tips:\n"
-                f"• If status is 403: The model '{model}' is gated. Go to your Featherless dashboard and click 'Unlock Model' to accept its license.\n"
-                f"• If status is 400: The model is cold/not ready. Wait a moment or try again."
-            )
-
-        except (RateLimitError, APIStatusError) as e:
-            status = getattr(e, "status_code", None)
-            body = e.response.text if hasattr(e, "response") else str(e)
-            is_retryable = status == 429 or "capacity" in body.lower()
-            last_err = RuntimeError(f"Featherless API Error (Status {status}): {body}")
-            if is_retryable and attempt < retries - 1:
-                time.sleep(2 * (attempt + 1))
-                continue
-            raise last_err from e
-        except APIError as e:
-            raise RuntimeError(f"Featherless API Error: {e}") from e
-        except Exception as e:
-            if isinstance(e, RuntimeError):
-                raise
-            raise RuntimeError(f"Provider API call failed: {e}") from e
-
-    raise last_err or RuntimeError(f"_chat failed after {retries} attempts with no captured error")
-
-
-def _extract_content(response, raw_text_body: str) -> str:
-    """Pulls the message text out of a parsed response, handling both the
-    typed object and the raw-dict shapes the SDK can return."""
-    try:
-        if hasattr(response, "model_dump"):
-            data = response.model_dump()
-            choices = data.get("choices")
-            if not choices:
-                raise ValueError(f"API response contained no choices. Raw body: {raw_text_body}")
-            content = choices[0]["message"]["content"]
-        elif hasattr(response, "choices") and response.choices:
-            content = response.choices[0].message.content
-        else:
-            raise ValueError(f"Unrecognized response structure. Raw body: {raw_text_body}")
-
-        if content is None:
-            raise ValueError(f"Message content was explicitly null. Raw body: {raw_text_body}")
-
-        return str(content)
-
-    except (IndexError, KeyError, TypeError, AttributeError, ValueError) as e:
-        raise ModelOutputError(
-            raw_text=raw_text_body or str(response),
-            context=f"Failed to extract text from API response ({type(e).__name__}: {e})."
-        )
-
-
-def _chat_with_fallback(client: OpenAI, models: list[str], system_prompt: str,
-                         user_content: str, **kwargs) -> tuple[str, str]:
-    """Tries each model in order. A model only gets skipped after its own
-    retries (inside _chat) are exhausted - this isn't 'try everything
-    once', it's 'exhaust the primary model's retries, THEN fail over to a
-    genuinely different model' - real redundancy against one specific
-    model being down, not just a second roll of the same dice.
-
-    Returns (content, model_that_actually_answered) - callers that record
-    which model produced a result (like run_math_check's model_id field)
-    need the real answer, not an assumption that the first model in the
-    list always won."""
-    last_err = None
-    for model in models:
-        try:
-            return _chat(client, model, system_prompt, user_content, **kwargs), model
-        except Exception as e:
-            last_err = e
-            continue
-    raise last_err or RuntimeError("No models available in fallback chain")
+          temperature: float = 0.0, max_tokens: int = 2048) -> str:
+    response = client.chat.completions.create(
+        model=model,
+        messages=[
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_content},
+        ],
+        temperature=temperature,
+        max_completion_tokens=max_tokens,  # not max_tokens - some newer Groq models (e.g. openai/gpt-oss-120b) reject the older parameter name with a 400
+    )
+    return response.choices[0].message.content
 
 
 # ---------------------------------------------------------------------------
@@ -224,8 +140,15 @@ def _chat_with_fallback(client: OpenAI, models: list[str], system_prompt: str,
 # ---------------------------------------------------------------------------
 
 def run_extraction(secrets: dict, source_text: str) -> list[dict]:
-    client = _get_client(secrets)
-    raw, _ = _chat_with_fallback(client, _models_for("extraction"), EXTRACTION_SYSTEM_PROMPT, source_text)
+    """Returns a list of dicts matching schemas.ExtractedStep shape
+    (index, latex, expr). Raises ModelOutputError (with the raw model text
+    attached) if the output can't be turned into a usable list, even after
+    unwrapping a common model habit: returning {"steps": [...]} instead of
+    a bare array despite being told to. Let this propagate to the caller -
+    a visible, informative error beats a silent empty result or an opaque
+    crash, especially during a live demo."""
+    client, provider = _get_client(secrets)
+    raw = _chat(client, _model_for("extraction", provider), EXTRACTION_SYSTEM_PROMPT, source_text)
     parsed = _extract_json(raw)
 
     if isinstance(parsed, list):
@@ -242,20 +165,23 @@ def run_extraction(secrets: dict, source_text: str) -> list[dict]:
 
 # ---------------------------------------------------------------------------
 # Stage 2: Math-check escalation
+# Call this ONLY for steps where VerifiedStep.needs_math_model_check() is
+# True - never for every step. See core/sympy_verifier.py.
 # ---------------------------------------------------------------------------
 
 def run_math_check(secrets: dict, step_index: int, prev_latex: str, curr_latex: str) -> MathModelOpinion:
-    client = _get_client(secrets)
+    client, provider = _get_client(secrets)
+    model = _model_for("math_check", provider)
     user_content = json.dumps({
         "step_index": step_index,
         "previous_step_latex": prev_latex,
         "current_step_latex": curr_latex,
     })
-    raw, model_used = _chat_with_fallback(client, _models_for("math_check"), MATH_CHECK_SYSTEM_PROMPT, user_content)
+    raw = _chat(client, model, MATH_CHECK_SYSTEM_PROMPT, user_content)
     parsed = _extract_json(raw)
     return MathModelOpinion(
         step_index=parsed["step_index"],
-        model_id=model_used,
+        model_id=model,
         verdict=parsed["verdict"],
         explanation=parsed.get("explanation", ""),
     )
@@ -263,16 +189,20 @@ def run_math_check(secrets: dict, step_index: int, prev_latex: str, curr_latex: 
 
 # ---------------------------------------------------------------------------
 # Stage 3: Judge
+# Receives only flagged steps (sympy_verifier.discrepancies_for_judge output)
+# plus any math_model_opinions collected in stage 2 - never the full
+# derivation.
 # ---------------------------------------------------------------------------
 
 def run_judge(secrets: dict, flagged_steps: list[dict],
               math_model_opinions: Optional[list[dict]] = None) -> list[JudgeVerdict]:
-    client = _get_client(secrets)
+    client, provider = _get_client(secrets)
+    model = _model_for("judge", provider)
     user_content = json.dumps({
         "flagged_steps": flagged_steps,
         "math_model_opinions": math_model_opinions or [],
     })
-    raw, _ = _chat_with_fallback(client, _models_for("judge"), JUDGE_SYSTEM_PROMPT, user_content)
+    raw = _chat(client, model, JUDGE_SYSTEM_PROMPT, user_content)
     parsed = _extract_json(raw)
     return [
         JudgeVerdict(
@@ -287,6 +217,9 @@ def run_judge(secrets: dict, flagged_steps: list[dict],
 
 # ---------------------------------------------------------------------------
 # Stage 0: OCR (only called when core/pdf_parser.py finds no text layer)
+# One call per rendered page image - more rate-limit-prone than the other
+# stages, so this is the one with retry built in rather than failing the
+# whole PDF over a single transient 429.
 # ---------------------------------------------------------------------------
 
 _OCR_INSTRUCTION = (
@@ -299,13 +232,13 @@ _OCR_INSTRUCTION = (
 def run_ocr(secrets: dict, page_image_b64: str, retries: int = 3) -> str:
     import time
 
-    client = _get_client(secrets)
-    model = _models_for("ocr")[0]  # single vision-capable model for now, no fallback yet
+    client, provider = _get_client(secrets)
+    model = _model_for("ocr", provider)
 
     last_err = None
     for attempt in range(retries):
         try:
-            raw_resp = client.with_raw_response.chat.completions.create(
+            response = client.chat.completions.create(
                 model=model,
                 messages=[{
                     "role": "user",
@@ -317,21 +250,7 @@ def run_ocr(secrets: dict, page_image_b64: str, retries: int = 3) -> str:
                     ],
                 }],
             )
-            
-            if raw_resp.status_code != 200:
-                raise RuntimeError(f"OCR HTTP {raw_resp.status_code}: {raw_resp.text}")
-
-            response = raw_resp.parse()
-            if hasattr(response, "model_dump"):
-                choices = response.model_dump().get("choices")
-                if not choices:
-                    raise ValueError(f"OCR response contained no choices: {raw_resp.text}")
-                content = choices[0]["message"]["content"]
-            else:
-                content = response.choices[0].message.content
-                
-            return str(content).strip()
-            
+            return response.choices[0].message.content.strip()
         except Exception as e:
             last_err = e
             if attempt < retries - 1:
@@ -341,7 +260,10 @@ def run_ocr(secrets: dict, page_image_b64: str, retries: int = 3) -> str:
 
 
 if __name__ == "__main__":
-    fake_secrets = {}
+    # Local smoke test - no Streamlit, no real API call. Confirms the
+    # module wires together and the config-not-found path fails loudly,
+    # which is what you want on a live demo screen, not a silent None.
+    fake_secrets = {}  # deliberately empty
     try:
         run_extraction(fake_secrets, "x + 1 = 2")
     except RuntimeError as e:
