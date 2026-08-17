@@ -24,7 +24,7 @@ from sympy_verifier import verify_derivation, discrepancies_for_judge
 from featherless_client import run_extraction, run_math_check, run_judge, ModelOutputError
 from pdf_parser import get_derivation_text
 
-_SECRET_KEYS = ["PROVIDER", "GROQ_API_KEY", "FEATHERLESS_API_KEY"]
+_SECRET_KEYS = ["PROVIDER",  "FEATHERLESS_API_KEY"]
 
 
 def get_secrets() -> dict:
