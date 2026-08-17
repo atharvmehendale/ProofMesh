@@ -48,16 +48,22 @@ step is meant to follow algebraically from the one before it. Skip
 surrounding prose, figure captions, and unrelated equations that aren't
 part of a step-by-step chain.
 
-If the input contains a chained equality written on one line - e.g.
-"A = B = C" - split it into separate, individual steps for A, B, and C,
-in order. Do NOT bundle two links of the chain into a single step as their
-own equation (do not produce a step whose content is "A = B" followed by a
-step whose content is "B = C"). Each step should be one expression on its
-own (or, if a single genuine equation is itself one step of the
-derivation, like "x = 5" appearing as its own line, that's fine as-is) -
-the goal is that consecutive steps can be compared directly to each other,
-which breaks if a step already contains an internal equals sign pairing
-two other steps together.
+If the input contains a chained equality written on one line — for example
+"A = B" or "A = B = C" — always split it into separate individual steps,
+one for each expression, in the order they appear.
+
+Examples:
+- "(x+1)^2 = x^2 + 2x + 1"   → two steps: "(x+1)^2"  then  "x^2 + 2x + 1"
+- "A = B = C"                → three steps: "A", "B", "C"
+
+Do NOT keep "A = B" as a single step that contains an equation.
+Each step must be one expression on its own so that consecutive steps
+can be compared directly by the verifier.
+
+Only keep a full equation (using Eq(...)) as one step when it is clearly
+a standalone final result or definition that is not part of a multi-step
+derivation (for example "x = 5" appearing alone with no surrounding
+derivation steps).
 
 Output ONLY a JSON array of step objects. No prose, no markdown fences,
 no explanation before or after.
