@@ -5,7 +5,8 @@ Featherless-only client for all three LLM stages (extraction, math-check
 escalation, judge) plus OCR.
 
 HISTORY: this was originally provider-agnostic (Groq + Featherless), used
-during development to test the pipeline shape to save Featherless.ai credits. Groq has been fully removed now that Featherless is
+during development to test the pipeline shape before Featherless credits
+were available. Groq has been fully removed now that Featherless is
 confirmed working - keeping dead provider-switching logic around after a
 submission is more confusing than useful, not safer.
 """
