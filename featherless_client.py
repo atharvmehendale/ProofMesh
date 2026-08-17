@@ -58,7 +58,7 @@ def _get_client(secrets: dict) -> OpenAI:
     # during testing, and it doesn't show visually in a secrets editor.
     api_key = str(api_key).strip()
 
-    return OpenAI(base_url=FEATHERLESS_BASE_URL, api_key=api_key, timeout=30.0)
+    return OpenAI(base_url=FEATHERLESS_BASE_URL, api_key=api_key, timeout=15.0)
 
 
 def _models_for(stage: str) -> list[str]:
@@ -109,7 +109,7 @@ def _extract_json(raw_text: str):
 
 
 def _chat(client: OpenAI, model: str, system_prompt: str, user_content: str,
-          temperature: float = 0.0, max_tokens: int = 2048, retries: int = 3) -> str:
+          temperature: float = 0.0, max_tokens: int = 2048, retries: int = 2) -> str:
     """Retries on transient failures - rate limits, and capacity errors
     like 'temporarily at capacity' (a real error hit during testing, not
     hypothetical) - since those are explicitly temporary per Featherless's
